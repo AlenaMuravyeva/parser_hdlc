@@ -2,6 +2,7 @@
 """HDLC parser."""
 import collections
 import StringIO
+import check_summ
 
 
 class Message(
@@ -47,7 +48,7 @@ class FrameFormat(
             ]
         )
 ):
-    """Detail structure field "frame_format" in structure 'Message'"""
+    """Detail structure field "frame_format" in the class 'Message'"""
     def __str__(self):
         """Override magic method __str__, for print """
         fmt = [
@@ -69,7 +70,7 @@ class Control(
             ]
         )
 ):
-    """Detail structure field "control" in structure 'Message'"""
+    """Detail structure field "control" in the class 'Message'"""
     def __str__(self):
         """Override magic method __str__, for print """
         fmt = [
@@ -89,60 +90,51 @@ class CheckSummError(Exception):
     pass
 
 
+class LenghtError(Exception):
+    """
+    Exception raised, if lenght is not correct
+    """
+    pass
+
+
 class Parser(object):
     """ HDLC parser"""
-    # pylint: disable=too-many-instance-attributes
     def __init__(self):
-        self.data = ''
-        self.position = 0
-        self.position_controll = 0
-        self.position_hcs = 0
-        self.position_info = 0
-        self.position_fcs = 0
-        self.position_flag_end = 0
-        self.value_frame = 0
-        self.position_src_addr = 0
-        self.position_dest_addr = 3
+        """Initialization fields"""
+        self.counter_readed_bytes = 0
+        self.raw_frame = None
 
     def transformation_to_bytes(self, data):
-        """Converts to byte string."""
-        self.data = data
-        file_bytes = StringIO.StringIO(self.data.decode('hex'))
-        for byte in file_bytes:
-            str_bytes = byte
-            return str_bytes
+        """Converts to byte string and assign value raw_frame"""
+        file_bytes = StringIO.StringIO(data.decode('hex'))
+        self.raw_frame = data
+        return file_bytes
 
-    def _add_flag(self, srt_bytes):
+    def _get_flag(self, srt_bytes):
         """
-        Extract the flags from Message
+        Return the flags from Message
          """
-        flag = ''
-        if self.position == 0 and srt_bytes[0] == '7e'.decode('hex'):
-            flag = srt_bytes[0].encode('hex')
-            self.position += 1
-        if self.position == 8:
-            flag = srt_bytes[self.position_flag_end]
-            flag = flag.encode('hex')
-        return flag
-        # flag = srt_bytes.read(1)
-        # if flag != '7e'.decode('hex'):
-        #     raise ValueError("wrong frame guard")
-        # return flag
+        flag = srt_bytes.read(1)
+        if flag != '7e'.decode('hex'):
+            raise ValueError("wrong frame guard")
+        flag.encode('hex')
+        self.counter_readed_bytes += 1
+        return flag.encode('hex')
 
-    def _get_len(self):
+    def _get_len(self, value_frame):
         """
         Return frame length
         """
         bit_mask_lenght = 0x7FF
-        field_frame_format_len = self.value_frame & bit_mask_lenght
+        field_frame_format_len = value_frame & bit_mask_lenght
         return field_frame_format_len
 
-    def _get_fragmentation_bit(self):
+    def _get_fragmentation_bit(self, value_frame):
         """
         Return fragmention_bit
         """
         bit_mask_framention = 0x800
-        fragmention_bit = self.value_frame & bit_mask_framention
+        fragmention_bit = value_frame & bit_mask_framention
         status = 'False'
         if fragmention_bit:
             status = 'True'
@@ -150,12 +142,12 @@ class Parser(object):
             status = 'False'
         return status
 
-    def _get_type(self):
+    def _get_type(self, value_frame):
         """
         Return format type
         """
         bit_mask_format_type = 0xF000
-        format_type = self.value_frame & bit_mask_format_type
+        format_type = value_frame & bit_mask_format_type
         value_type = 0
         if format_type == 40960:
             value_type = 3
@@ -163,76 +155,54 @@ class Parser(object):
             value_type = format_type
         return value_type
 
-    def _add_frame_format(self, srt_bytes):
+    def _get_frame_format(self, srt_bytes):
         """
-        Take first and second bytes and record to structure - it is
-        field "frame format" in Message.
-        Call methods, witch calculate length fields "frame format" and
-        add the structure FieldFrameFormat in the structure Message.
+        Return fields 'frame format'.
+        Call methods, witch get length fields:"frame format", "segmentation
+        bit", "format type".
         """
-        if self.position == 1:
-            f_f = srt_bytes[1:3:].encode('hex')
-            self.position += 1
-            self.value_frame = int(f_f, 16)
-            frame_len = self._get_len()
-            fragmention_bit = self._get_fragmentation_bit()
-            format_type = self._get_type()
-            frame_format = {
-                'frame_len': frame_len,
-                'fragmention_bit': fragmention_bit,
-                'format_type': format_type,
-            }
-            return frame_format
+        frame_format = srt_bytes.read(2)
+        value_frame_format = frame_format.encode('hex')
+        value_frame = int(value_frame_format, 16)
+        frame_len = self._get_len(value_frame)
+        fragmention_bit = self._get_fragmentation_bit(value_frame)
+        format_type = self._get_type(value_frame)
+        frame_format = {
+            'frame_len': frame_len,
+            'fragmention_bit': fragmention_bit,
+            'format_type': format_type,
+        }
+        self.counter_readed_bytes += 2
+        return frame_format
 
-    def _add_dest_address(self, srt_bytes):
+    def _get_address(self, srt_bytes):
         """
-        Take third and next bytes and record to structure - these are
-        fields "dest address" in structure.
-        They may be 1, 2 or 4 bytes
+        Return value "destination address"  or "source address".
+        They may be 1, 2 or 4 bytes.
         """
         value_end = 0x1
         bytes_addrr = ''
-        if self.position == 2:
-            for _ in range(0, 4):
-                bytes_addrr = bytes_addrr + srt_bytes[self.position_dest_addr]
-                number_address = int(bytes_addrr.encode('hex'), 16)
-                if number_address & value_end:
-                    bytes_addrr = bytes_addrr.encode('hex')
-                    self.position += 1
-                    self.position_src_addr = self.position_dest_addr + 1
-                    break
-                else:
-                    self.position_dest_addr += 1
+        for _ in range(0, 4):
+            bytes_addrr = bytes_addrr + srt_bytes.read(1)
+            number_address = int(bytes_addrr.encode('hex'), 16)
+            self.counter_readed_bytes += 1
+            if number_address & value_end:
+                bytes_addrr = bytes_addrr.encode('hex')
+                break
+            else:
+                continue
         return bytes_addrr
 
-    def _add_scr_address(self, srt_bytes):
-        """
-        """
-        value_end = 0x1
-        bytes_addrr = ''
-        if self.position == 3:
-            for _ in range(0, 4):
-                bytes_addrr = bytes_addrr + srt_bytes[self.position_src_addr]
-                number_address = int(bytes_addrr.encode('hex'), 16)
-                if number_address & value_end:
-                    bytes_addrr = bytes_addrr.encode('hex')
-                    self.position += 1
-                    self.position_controll = self.position_src_addr + 1
-                    break
-                else:
-                    self.position_src_addr += 1
-        return bytes_addrr
-
-    def _get_lsb(self):
+    def _get_lsb(self, value_controll):
         """Return  LSB """
         bit_mask_lsb = 0x1
-        lsb = self.value_controll & bit_mask_lsb
+        lsb = value_controll & bit_mask_lsb
         return lsb
 
-    def _get_poll_fin(self):
+    def _get_poll_fin(self, value_controll):
         """Return value poll or final the bits"""
         bit_mask_poll_final = 0x10
-        poll_final = self.value_controll & bit_mask_poll_final
+        poll_final = value_controll & bit_mask_poll_final
         value = 0
         if poll_final == 16:
             value = 1
@@ -240,16 +210,16 @@ class Parser(object):
             value = poll_final
         return value
 
-    def _get_recive(self):
+    def _get_recive(self, value_controll):
         """Return receive sequence number"""
         bit_mask_recive = 0xe0
-        recive = self.value_controll & bit_mask_recive
+        recive = value_controll & bit_mask_recive
         return recive
 
-    def _get_send(self):
+    def _get_send(self, value_controll):
         """Return send sequence number"""
         bit_mask_send = 0xe
-        send = self.value_controll & bit_mask_send
+        send = value_controll & bit_mask_send
         return send
 
     def _define_type_field_control(self, send, recive, lsb):
@@ -276,100 +246,83 @@ class Parser(object):
 
         return type_control
 
-    def _add_controll(self, srt_bytes):
+    def _get_controll(self, srt_bytes):
         """
-        Calculate field values "control" and they add in the structure
-        'FieldControll'. Structure FieldControll records in
-        the structure 'Message'.
-        The field contain 1 byte
+        Return field values"control": "lsb","poll_final", "send", "receive",
+        "type_conroll". The field contain 1 byte
         """
-        if self.position == 4:
-            control = srt_bytes[self.position_controll]
-            control = control.encode('hex')
-            self.position += 1
-            self.position_hcs = self.position_controll + 1
-            self.value_controll = int(control, 16)
-            lsb = self._get_lsb()
-            poll_final = self._get_poll_fin()
-            send = self._get_send()
-            recive = self._get_recive()
-            type_control = self._define_type_field_control(send, recive, lsb)
-            control = {
-                'command_response': type_control,
-                'send': send,
-                'recive': recive,
-                'lsb': lsb,
-                'poll_finall': poll_final,
-            }
-            return control
+        control = srt_bytes.read(1)
+        control = control.encode('hex')
+        value_controll = int(control, 16)
+        lsb = self._get_lsb(value_controll)
+        poll_final = self._get_poll_fin(value_controll)
+        send = self._get_send(value_controll)
+        recive = self._get_recive(value_controll)
+        type_control = self._define_type_field_control(send, recive, lsb)
+        control = {
+            'command_response': type_control,
+            'send': send,
+            'recive': recive,
+            'lsb': lsb,
+            'poll_finall': poll_final,
+        }
+        self.counter_readed_bytes += 1
+        return control
 
-    def _check_hcs(self, hcs):
-        """
-        Check 'header check sequence' with real the number bytes: frame format,
-        dest address, scr address, control, hcs
-        """
-        try:
-            start_flag = 1
-            hcs_bytes = 2
-            print (self.position_hcs + hcs_bytes - start_flag)
-            print hcs
-            if (self.position_hcs + hcs_bytes - start_flag) == hcs:
-                return True
-            else:
-                raise CheckSummError()
-        except CheckSummError as exc:
-            print ("Value field 'hcs' is not correct", exc)
+    def _validate_checksum(self, expected, value, checksum_type):
+        """Check header check sequence."""
+        calculated_checksum = check_summ.checksum(value)
+        if expected != calculated_checksum:
+            raise CheckSummError(
+                "{} checksum validation failed. Expected {:x}, got {:x}".format
+                (
+                    checksum_type, expected, calculated_checksum
+                )
+            )
 
-    def _add_hcs(self, srt_bytes):
-        """
-        Take next bytes after "field control" and record to structure -
-        these are fields "hcs" in structure. It is the field - header
-        check sequence. The field contain 2 bytes
-        """
-        if self.position == 5:
-            num_bytes_hcs = 2
-            hcs = srt_bytes[self.position_hcs]
-            hcs = hcs.encode('hex')
-            hcs = int(hcs, 16)
-            # status = self._check_hcs(hcs)
-            # if status is True:
-            self.position += 1
-            self.position_info = self.position_hcs + num_bytes_hcs
-            return hcs
+    def _get_hcs(self, srt_bytes):
+        """Return value header check sequence. The field contain 2 bytes"""
+        hcs = int(srt_bytes.read(2).encode('hex'), 16)
+        hcs = (hcs >> 8 | hcs << 8) & 0xFFFF
+        value = self.raw_frame[2:(self.counter_readed_bytes * 2)]
+        self._validate_checksum(hcs, value.decode('hex'), "HCS")
+        self.counter_readed_bytes += 2
+        return hcs
 
-    def _add_information(self, srt_bytes, frame_format):
+    def _get_information(self, srt_bytes, frame_format):
         """
         Calculate length the field "information".
         The field may be any sequence of bytes.
         """
-        if self.position == 6:
-            cons = 3
-            bytes_info = ''
-            frame_len = frame_format['frame_len']
-            len_info = frame_len - cons
-            len_info = len_info - self.position_hcs
-            start_pos_info = self.position_info
-            for _ in range(0, len_info):
-                bytes_info = bytes_info + srt_bytes[start_pos_info]
-                start_pos_info += 1
-            information = bytes_info.encode('hex')
-            self.position_fcs = start_pos_info
-            self.position += 1
-            return information
+        first_flag = 1
+        frame_len = frame_format['frame_len']
+        len_info = frame_len - first_flag - self.counter_readed_bytes
+        information = srt_bytes.read(len_info)
+        information = information.encode('hex')
+        self.counter_readed_bytes += len_info
+        return information
 
-    def _add_fcs(self, srt_bytes):
-        """
-        Add 'frame check sequence' in the structure.
-        The field have length 2 bytes.
-        """
-        if self.position == 7:
-            fcs_bytes = 2
-            fcs = srt_bytes[self.position_fcs: self.position_fcs + fcs_bytes:]
-            fcs = fcs.encode('hex')
-            fcs = int(fcs, 16)
-            self.position += 1
-            self.position_flag_end = self.position_fcs + fcs_bytes
-            return fcs
+    def _get_fcs(self, srt_bytes, frame_format):
+        """Return frame check sequence.The field have length 2 bytes."""
+        fcs = int(srt_bytes.read(2).encode('hex'), 16)
+        fcs = (fcs >> 8 | fcs << 8) & 0xFFFF
+        value = self.raw_frame[2:-6]
+        self._validate_checksum(fcs, value.decode('hex'), "FCS")
+        self.counter_readed_bytes += 2
+        self._validation_lenght(frame_format)
+        return fcs
+
+    def _validation_lenght(self, frame_format):
+        """Validation frame lenght"""
+        expected = frame_format['frame_len']
+        frame_len = self.counter_readed_bytes - 1
+        print self.counter_readed_bytes
+        if expected != frame_len:
+            raise LenghtError(
+                "lenght validation failed. Expected {:}, got {:}".format(
+                    expected, frame_len
+                )
+            )
 
     def _construct_data_object(self, data):
         """Create instances Message, FrameFormat, Control"""
@@ -401,17 +354,22 @@ class Parser(object):
         Parsing the string and add the values in the _dict, return
         instance 'Message'
         """
+        information = None
+        fcs = None
+        flag_end = None
         srt_bytes = self.transformation_to_bytes(data)
-
-        flag = self._add_flag(srt_bytes)
-        frame_format = self._add_frame_format(srt_bytes)
-        dest_address = self._add_dest_address(srt_bytes)
-        scr_address = self._add_scr_address(srt_bytes)
-        control = self._add_controll(srt_bytes)
-        hcs = self._add_hcs(srt_bytes)
-        information = self._add_information(srt_bytes, frame_format)
-        fcs = self._add_fcs(srt_bytes)
-        flag_end = self._add_flag(srt_bytes)
+        flag = self._get_flag(srt_bytes)
+        frame_format = self._get_frame_format(srt_bytes)
+        dest_address = self._get_address(srt_bytes)
+        scr_address = self._get_address(srt_bytes)
+        control = self._get_controll(srt_bytes)
+        hcs = self._get_hcs(srt_bytes)
+        if frame_format['frame_len'] == self.counter_readed_bytes - 1:
+            flag_end = self._get_flag(srt_bytes)
+        else:
+            information = self._get_information(srt_bytes, frame_format)
+            fcs = self._get_fcs(srt_bytes, frame_format)
+            flag_end = self._get_flag(srt_bytes)
 
         data = {
             'flag': flag,
@@ -440,5 +398,6 @@ def main(data):
 
 if __name__ == '__main__':
     main(
-        "7ea011610330d3bee6e700c70181010052ab7e"
+        "7ea00703413142e27e"
+
     )
