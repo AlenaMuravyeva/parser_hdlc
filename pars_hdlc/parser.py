@@ -30,9 +30,9 @@ class Message(
             'Destination address: {}\n'.format(self.dest_addr),
             'Source address: {}\n'.format(self.scr_addr),
             'Control: {}\n'.format(self.control),
-            'Header check sequence:{}\n'.format(self.hcs),
+            'Header check sequence:{:}\n'.format(self.hcs),
             'Information: {}\n'.format(self.information),
-            'Frame check sequence:{}\n'.format(self.fcs),
+            'Frame check sequence:{:}\n'.format(self.fcs),
             'Flag:{}\n'.format(self.flag_end),
         ]
         return ''.join(fmt)
@@ -117,9 +117,9 @@ class Parser(object):
         flag = srt_bytes.read(1)
         if flag != '7e'.decode('hex'):
             raise ValueError("wrong frame guard")
-        flag.encode('hex')
         self.counter_readed_bytes += 1
-        return flag.encode('hex')
+        flag = flag.encode('hex')
+        return flag
 
     def _get_len(self, value_frame):
         """
@@ -246,7 +246,7 @@ class Parser(object):
 
         return type_control
 
-    def _get_controll(self, srt_bytes):
+    def _get_control(self, srt_bytes):
         """
         Return field values"control": "lsb","poll_final", "send", "receive",
         "type_conroll". The field contain 1 byte
@@ -274,7 +274,7 @@ class Parser(object):
         calculated_checksum = check_summ.checksum(value)
         if expected != calculated_checksum:
             raise CheckSummError(
-                "{} checksum validation failed. Expected {:x}, got {:x}".format
+                "{} checksum validation failed. Expected {:}, got {:}".format
                 (
                     checksum_type, expected, calculated_checksum
                 )
@@ -285,7 +285,8 @@ class Parser(object):
         hcs = int(srt_bytes.read(2).encode('hex'), 16)
         hcs = (hcs >> 8 | hcs << 8) & 0xFFFF
         value = self.raw_frame[2:(self.counter_readed_bytes * 2)]
-        self._validate_checksum(hcs, value.decode('hex'), "HCS")
+        value = value.decode('hex')
+        self._validate_checksum(hcs, value, "HCS")
         self.counter_readed_bytes += 2
         return hcs
 
@@ -316,7 +317,6 @@ class Parser(object):
         """Validation frame lenght"""
         expected = frame_format['frame_len']
         frame_len = self.counter_readed_bytes - 1
-        print self.counter_readed_bytes
         if expected != frame_len:
             raise LenghtError(
                 "lenght validation failed. Expected {:}, got {:}".format(
@@ -362,7 +362,7 @@ class Parser(object):
         frame_format = self._get_frame_format(srt_bytes)
         dest_address = self._get_address(srt_bytes)
         scr_address = self._get_address(srt_bytes)
-        control = self._get_controll(srt_bytes)
+        control = self._get_control(srt_bytes)
         hcs = self._get_hcs(srt_bytes)
         if frame_format['frame_len'] == self.counter_readed_bytes - 1:
             flag_end = self._get_flag(srt_bytes)
@@ -398,6 +398,5 @@ def main(data):
 
 if __name__ == '__main__':
     main(
-        "7ea00703413142e27e"
-
+        "7ea0200361931b9f8180140502080006020800070400000007080400000007b3c67e"
     )

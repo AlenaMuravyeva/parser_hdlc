@@ -1,0 +1,12 @@
+.cache/
+.coverage
+dist/
+htmlcov/
+tests/__init__.py
+pars_hdlc.egg-info/
+pars_hdlc/__init__.pyc
+pars_hdlc/check_summ.pyc
+pars_hdlc/parser.pyc
+tests/__init__.pyc
+tests/__pycache__/
+
